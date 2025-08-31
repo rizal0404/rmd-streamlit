@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
 import json
+import time
 from datetime import datetime
 from .compute import calculate_all_stages, calculate_quality_moduli, compute_bogue, compute_cv_total, compute_total_fuel_tph
+from .auth import auth_manager, AuthenticationError, get_auth_config
 
 RAW_MIX_COLUMNS = [
 	"Material","H2O","LOI","SiO2","Al2O3","Fe2O3","CaO","MgO","K2O","Na2O","SO3","Cl","HPP","min%","max%"
@@ -852,18 +854,24 @@ def build_project_management_sidebar():
 	
 	from core.database import db
 	
-	# Get all projects
-	projects = db.get_projects()
+	# Get current user
+	user_info = auth_manager.get_current_user()
+	user_id = None
+	if user_info:
+		user_id = user_info.get('username') or user_info.get('id')
+	
+	# Get projects for current user
+	projects = db.get_projects(user_id=user_id)
 	
 	# Current project selection
 	if "current_project_id" not in st.session_state:
 		if projects:
 			st.session_state.current_project_id = projects[0]["id"]
 		else:
-			# Create default project
-			project_id = db.create_project("Default Project", "Initial project setup")
+			# Create default project for current user
+			project_id = db.create_project("Default Project", "Initial project setup", user_id=user_id)
 			st.session_state.current_project_id = project_id
-			projects = db.get_projects()
+			projects = db.get_projects(user_id=user_id)
 	
 	# Project selector
 	if projects:
@@ -911,7 +919,7 @@ def build_project_management_sidebar():
 				if st.button("Create", key="create_project_confirm"):
 					if new_name.strip():
 						try:
-							project_id = db.create_project(new_name.strip(), new_desc.strip())
+							project_id = db.create_project(new_name.strip(), new_desc.strip(), user_id=user_id)
 							st.session_state.current_project_id = project_id
 							st.session_state.show_new_project_dialog = False
 							st.rerun()
@@ -952,7 +960,7 @@ def build_project_management_sidebar():
 					with col1:
 						if st.button("Import", key="import_confirm"):
 							if import_name.strip():
-								project_id = db.import_project(import_name.strip(), import_data)
+								project_id = db.import_project(import_name.strip(), import_data, user_id=user_id)
 								st.session_state.current_project_id = project_id
 								st.session_state.show_import_dialog = False
 								st.success("✅ Project imported!")
@@ -987,7 +995,7 @@ def build_project_management_sidebar():
 							st.session_state.current_project_id = remaining_projects[0]["id"]
 						else:
 							# Create a new default project
-							project_id = db.create_project("Default Project", "New project")
+							project_id = db.create_project("Default Project", "New project", user_id=user_id)
 							st.session_state.current_project_id = project_id
 						
 						st.session_state.show_delete_dialog = False
@@ -1151,3 +1159,267 @@ def build_project_history_tab():
 	
 	except Exception as e:
 		st.error(f"Error loading project history: {str(e)}")
+
+
+# Authentication UI Components
+def build_login_page():
+	"""Build the main login page"""
+	st.set_page_config(page_title="Login - Raw Mix Design Optimizer", layout="centered")
+	
+	# Apply basic styling for login page
+	st.markdown("""
+	<style>
+	.login-container {
+		padding: 2rem;
+		margin-top: 2rem;
+		border-radius: 10px;
+		background-color: #f8f9fa;
+		box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+	}
+	.login-header {
+		text-align: center;
+		margin-bottom: 2rem;
+	}
+	.auth-tab {
+		padding: 1rem 0;
+	}
+	</style>
+	""", unsafe_allow_html=True)
+	
+	# Header
+	st.markdown('<div class="login-header">', unsafe_allow_html=True)
+	st.title("🏭 Raw Mix Design Optimizer")
+	st.markdown("**Optimize your cement production with precision**")
+	st.markdown('</div>', unsafe_allow_html=True)
+	
+	auth_config = get_auth_config()
+	
+	# Check if any auth method is available
+	if not auth_config['clerk_enabled'] and not auth_config['local_auth_enabled']:
+		st.error("❌ No authentication methods configured. Please check your configuration.")
+		return
+	
+	# Auth tabs
+	tabs = []
+	if auth_config['local_auth_enabled']:
+		tabs.append("Local Login")
+	if auth_config['clerk_enabled']:
+		tabs.append("Clerk Login")
+	tabs.append("Register")
+	
+	tab_objects = st.tabs(tabs)
+	
+	tab_index = 0
+	
+	# Local Login Tab
+	if auth_config['local_auth_enabled']:
+		with tab_objects[tab_index]:
+			_build_local_login_form()
+		tab_index += 1
+	
+	# Clerk Login Tab
+	if auth_config['clerk_enabled']:
+		with tab_objects[tab_index]:
+			_build_clerk_login_form()
+		tab_index += 1
+	
+	# Register Tab
+	with tab_objects[tab_index]:
+		_build_register_form()
+	
+	# Footer
+	st.markdown("---")
+	st.markdown(
+		"<div style='text-align: center; color: #666; padding: 1rem;'>"
+		"<small>Raw Mix Design Optimizer v1.0 | Secure Authentication</small>"
+		"</div>",
+		unsafe_allow_html=True
+	)
+
+
+def _build_local_login_form():
+	"""Build local authentication login form"""
+	st.markdown('<div class="auth-tab">', unsafe_allow_html=True)
+	st.subheader("🔐 Local Login")
+	st.caption("Login with your local account credentials")
+	
+	with st.form("local_login_form"):
+		username = st.text_input("👤 Username", placeholder="Enter your username")
+		password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
+		remember_me = st.checkbox("Remember me")
+		
+		submitted = st.form_submit_button("🚀 Login", use_container_width=True)
+		
+		if submitted:
+			if not username or not password:
+				st.error("❌ Please enter both username and password.")
+			else:
+				try:
+					user_info = auth_manager.login_local(username, password)
+					st.success(f"✅ Welcome back, {user_info.get('full_name', username)}!")
+					st.balloons()
+					time.sleep(1)
+					st.rerun()
+				except AuthenticationError as e:
+					st.error(f"❌ Login failed: {str(e)}")
+				except Exception as e:
+					st.error(f"❌ Unexpected error: {str(e)}")
+	
+	st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _build_clerk_login_form():
+	"""Build Clerk authentication login form"""
+	st.markdown('<div class="auth-tab">', unsafe_allow_html=True)
+	st.subheader("🌐 Clerk Login")
+	st.caption("Login with your Clerk-managed account")
+	
+	st.info("🚧 **Coming Soon**: Clerk integration will be available in the next update. For now, please use Local Login.")
+	
+	# Placeholder for Clerk integration
+	with st.form("clerk_login_form"):
+		token = st.text_input(
+			"🎫 Clerk Token", 
+			type="password", 
+			placeholder="Paste your Clerk JWT token here",
+			help="Get your token from your Clerk dashboard"
+		)
+		
+		submitted = st.form_submit_button("🔗 Login with Clerk", use_container_width=True)
+		
+		if submitted:
+			if not token:
+				st.error("❌ Please enter your Clerk token.")
+			else:
+				try:
+					user_info = auth_manager.login_with_clerk(token)
+					st.success(f"✅ Welcome, {user_info.get('first_name', 'User')}!")
+					st.balloons()
+					time.sleep(1)
+					st.rerun()
+				except AuthenticationError as e:
+					st.error(f"❌ Clerk login failed: {str(e)}")
+				except Exception as e:
+					st.error(f"❌ Unexpected error: {str(e)}")
+	
+	# Instructions for Clerk setup
+	with st.expander("📋 How to get your Clerk token"):
+		st.markdown("""
+		**Steps to get your Clerk token:**
+		1. Go to your Clerk Dashboard
+		2. Navigate to the JWT Templates section
+		3. Create or copy an existing JWT token
+		4. Paste the token in the field above
+		
+		**Note**: This is a temporary authentication method. 
+		In production, Clerk authentication would be handled automatically.
+		""")
+	
+	st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _build_register_form():
+	"""Build user registration form"""
+	st.markdown('<div class="auth-tab">', unsafe_allow_html=True)
+	st.subheader("📝 Create Account")
+	st.caption("Register for a new local account")
+	
+	with st.form("register_form"):
+		col1, col2 = st.columns(2)
+		
+		with col1:
+			full_name = st.text_input("👤 Full Name", placeholder="John Doe")
+			username = st.text_input("🆔 Username", placeholder="johndoe")
+		
+		with col2:
+			email = st.text_input("📧 Email", placeholder="john@company.com")
+			password = st.text_input("🔒 Password", type="password", placeholder="Secure password")
+		
+		confirm_password = st.text_input("🔒 Confirm Password", type="password", placeholder="Re-enter password")
+		
+		terms_accepted = st.checkbox(
+			"I accept the terms and conditions",
+			help="By checking this box, you agree to our terms of service and privacy policy."
+		)
+		
+		submitted = st.form_submit_button("✨ Create Account", use_container_width=True)
+		
+		if submitted:
+			error_messages = []
+			
+			# Validation
+			if not all([full_name, username, email, password, confirm_password]):
+				error_messages.append("All fields are required.")
+			
+			if len(password) < 8:
+				error_messages.append("Password must be at least 8 characters long.")
+			
+			if password != confirm_password:
+				error_messages.append("Passwords do not match.")
+			
+			if "@" not in email:
+				error_messages.append("Please enter a valid email address.")
+			
+			if not terms_accepted:
+				error_messages.append("Please accept the terms and conditions.")
+			
+			if error_messages:
+				for msg in error_messages:
+					st.error(f"❌ {msg}")
+			else:
+				try:
+					success = auth_manager.register_local(username, email, password, full_name)
+					if success:
+						st.success("✅ Account created successfully! You can now login with your credentials.")
+						st.balloons()
+					else:
+						st.error("❌ Registration failed: Username or email already exists.")
+				except Exception as e:
+					st.error(f"❌ Registration error: {str(e)}")
+	
+	st.markdown('</div>', unsafe_allow_html=True)
+
+
+def build_user_profile_sidebar():
+	"""Build user profile section in sidebar"""
+	if not auth_manager.is_authenticated():
+		return
+	
+	user_info = auth_manager.get_current_user()
+	if not user_info:
+		return
+	
+	st.sidebar.markdown("---")
+	st.sidebar.markdown("**👤 User Profile**")
+	
+	# User information
+	name = user_info.get('full_name', user_info.get('username', 'User'))
+	email = user_info.get('email', 'Not available')
+	auth_method = st.session_state.get('auth_method', 'unknown')
+	
+	with st.sidebar.expander(f"👋 {name}", expanded=False):
+		st.write(f"📧 **Email**: {email}")
+		st.write(f"🔐 **Auth**: {auth_method.title()}")
+		
+		if 'last_login' in user_info and user_info['last_login']:
+			try:
+				last_login = datetime.fromisoformat(user_info['last_login'])
+				st.write(f"🕐 **Last login**: {last_login.strftime('%Y-%m-%d %H:%M')}")
+			except:
+				pass
+	
+	# Logout button
+	if st.sidebar.button("🚪 Logout", use_container_width=True):
+		auth_manager.logout()
+		st.success("✅ Logged out successfully!")
+		time.sleep(1)
+		st.rerun()
+
+
+def require_authentication():
+	"""Wrapper function to check authentication status"""
+	if not auth_manager.is_authenticated():
+		build_login_page()
+		st.stop()
+		return False
+	return True

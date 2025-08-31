@@ -19,12 +19,40 @@ class RawMixDatabase:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
+            # Check if this is a migration (existing database)
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'")
+            table_exists = cursor.fetchone() is not None
+            
+            if table_exists:
+                # Check if user_id column exists
+                cursor.execute("PRAGMA table_info(projects)")
+                columns = [column[1] for column in cursor.fetchall()]
+                if 'user_id' not in columns:
+                    # Add user_id column to existing projects table
+                    cursor.execute("ALTER TABLE projects ADD COLUMN user_id TEXT")
+                    # Remove UNIQUE constraint on name to allow multiple users to have projects with same name
+                    cursor.execute("""
+                        CREATE TABLE projects_new (
+                            id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            description TEXT,
+                            user_id TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            is_active BOOLEAN DEFAULT TRUE
+                        )
+                    """)
+                    cursor.execute("INSERT INTO projects_new SELECT id, name, description, user_id, created_at, updated_at, is_active FROM projects")
+                    cursor.execute("DROP TABLE projects")
+                    cursor.execute("ALTER TABLE projects_new RENAME TO projects")
+            
             # Projects table - stores different mix design projects
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
                     description TEXT,
+                    user_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     is_active BOOLEAN DEFAULT TRUE
@@ -156,16 +184,16 @@ class RawMixDatabase:
             conn.commit()
     
     # Project Management Methods
-    def create_project(self, name: str, description: str = "") -> str:
+    def create_project(self, name: str, description: str = "", user_id: str = None) -> str:
         """Create a new project and return its ID"""
         project_id = str(uuid.uuid4())
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO projects (id, name, description)
-                VALUES (?, ?, ?)
-            """, (project_id, name, description))
+                INSERT INTO projects (id, name, description, user_id)
+                VALUES (?, ?, ?, ?)
+            """, (project_id, name, description, user_id))
             conn.commit()
         
         # Initialize with default values
@@ -204,16 +232,26 @@ class RawMixDatabase:
         dust = defaults.get("dust", {})
         self.save_dust_composition(project_id, dust)
     
-    def get_projects(self) -> List[Dict]:
-        """Get all active projects"""
+    def get_projects(self, user_id: str = None) -> List[Dict]:
+        """Get all active projects, optionally filtered by user_id"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, name, description, created_at, updated_at
-                FROM projects 
-                WHERE is_active = TRUE 
-                ORDER BY updated_at DESC
-            """)
+            
+            if user_id:
+                cursor.execute("""
+                    SELECT id, name, description, user_id, created_at, updated_at
+                    FROM projects 
+                    WHERE is_active = TRUE AND user_id = ?
+                    ORDER BY updated_at DESC
+                """, (user_id,))
+            else:
+                # For backward compatibility, show all projects if no user_id provided
+                cursor.execute("""
+                    SELECT id, name, description, user_id, created_at, updated_at
+                    FROM projects 
+                    WHERE is_active = TRUE 
+                    ORDER BY updated_at DESC
+                """)
             
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -591,9 +629,9 @@ class RawMixDatabase:
             "results_history": self.get_results_history(project_id, limit=5)
         }
     
-    def import_project(self, name: str, project_data: Dict, description: str = "") -> str:
+    def import_project(self, name: str, project_data: Dict, description: str = "", user_id: str = None) -> str:
         """Import project from data"""
-        project_id = self.create_project(name, description)
+        project_id = self.create_project(name, description, user_id=user_id)
         
         # Import each data type
         if "general" in project_data:

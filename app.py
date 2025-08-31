@@ -34,9 +34,15 @@ from core.ui import (
 	to_rm_dict,
 	to_bounds_dict,
 	to_costs_dict,
+	require_authentication,
+	build_user_profile_sidebar,
 )
 
 st.set_page_config(page_title="Raw Mix Design Optimizer", layout="wide")
+
+# Authentication check - redirect to login if not authenticated
+if not require_authentication():
+	st.stop()
 
 # Dark Mode CSS
 def apply_dark_mode():
@@ -237,6 +243,9 @@ st.caption("Σ% = 100 with clinker-basis constraints (LSF, SM, AM, NaEq, C3S)")
 
 # Project Management Section in Sidebar
 build_project_management_sidebar()
+
+# User Profile Section in Sidebar
+build_user_profile_sidebar()
 
 # Dark Mode Toggle in Sidebar
 with st.sidebar:
