@@ -11,6 +11,11 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
 
 from core.model import solve_rawmix
 from core.compute import (

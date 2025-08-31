@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import time
+import os
 from datetime import datetime
 from .compute import calculate_all_stages, calculate_quality_moduli, compute_bogue, compute_cv_total, compute_total_fuel_tph
 from .auth import auth_manager, AuthenticationError, get_auth_config
@@ -1274,46 +1275,59 @@ def _build_clerk_login_form():
 	st.subheader("🌐 Clerk Login")
 	st.caption("Login with your Clerk-managed account")
 	
-	st.info("🚧 **Coming Soon**: Clerk integration will be available in the next update. For now, please use Local Login.")
+	st.success("✅ **Clerk Integration Configured!** You can now use Clerk authentication.")
 	
-	# Placeholder for Clerk integration
+	# Information about Clerk login process
+	with st.expander("📋 How to login with Clerk", expanded=True):
+		st.markdown("""
+		**For Development/Testing:**
+		1. Go to your Clerk Dashboard: https://dashboard.clerk.com
+		2. Navigate to your application
+		3. Go to "JWT Templates" section
+		4. Create a new template or use an existing one
+		5. Generate a JWT token for testing
+		6. Paste the token in the field below
+		
+		**For Production:**
+		Clerk authentication would be handled automatically through their hosted UI.
+		This manual token input is for development and testing purposes only.
+		
+		**Current Configuration:**
+		- Publishable Key: `{}`
+		- JWKS URL: `{}`
+		""".format(
+			os.getenv('CLERK_PUBLISHABLE_KEY', 'Not configured'),
+			os.getenv('CLERK_JWKS_URL', 'Not configured')
+		))
+	
+	# Token input form
 	with st.form("clerk_login_form"):
-		token = st.text_input(
-			"🎫 Clerk Token", 
-			type="password", 
-			placeholder="Paste your Clerk JWT token here",
-			help="Get your token from your Clerk dashboard"
+		token = st.text_area(
+			"🎫 Clerk JWT Token", 
+			placeholder="Paste your Clerk JWT token here...",
+			help="Get your token from your Clerk dashboard or use Clerk's sign-in component",
+			height=120
 		)
 		
 		submitted = st.form_submit_button("🔗 Login with Clerk", use_container_width=True)
 		
 		if submitted:
-			if not token:
+			if not token.strip():
 				st.error("❌ Please enter your Clerk token.")
 			else:
 				try:
-					user_info = auth_manager.login_with_clerk(token)
-					st.success(f"✅ Welcome, {user_info.get('first_name', 'User')}!")
-					st.balloons()
-					time.sleep(1)
-					st.rerun()
+					with st.spinner("Verifying Clerk token..."):
+						user_info = auth_manager.login_with_clerk(token.strip())
+						st.success(f"✅ Welcome, {user_info.get('full_name', 'User')}!")
+						st.balloons()
+						time.sleep(1)
+						st.rerun()
 				except AuthenticationError as e:
 					st.error(f"❌ Clerk login failed: {str(e)}")
+					st.info("💡 **Tip**: Make sure your JWT token is valid and not expired.")
 				except Exception as e:
 					st.error(f"❌ Unexpected error: {str(e)}")
-	
-	# Instructions for Clerk setup
-	with st.expander("📋 How to get your Clerk token"):
-		st.markdown("""
-		**Steps to get your Clerk token:**
-		1. Go to your Clerk Dashboard
-		2. Navigate to the JWT Templates section
-		3. Create or copy an existing JWT token
-		4. Paste the token in the field above
-		
-		**Note**: This is a temporary authentication method. 
-		In production, Clerk authentication would be handled automatically.
-		""")
+					st.info("🚫 **Debug**: Check your Clerk configuration and token format.")
 	
 	st.markdown('</div>', unsafe_allow_html=True)
 
